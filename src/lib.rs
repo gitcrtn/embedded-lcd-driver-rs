@@ -1,30 +1,22 @@
-#![no_std]
-
-//! This crate provides a ST7735 driver to connect to TFT displays.
-
 pub mod instruction;
 
 use crate::instruction::Instruction;
 
 use embedded_hal::blocking::delay::DelayMs;
-use embedded_hal::blocking::spi;
-use embedded_hal::digital::v2::OutputPin;
+use rppal::gpio::OutputPin;
+use rppal::spi::Spi;
 
 /// ST7735 driver to connect to TFT displays.
-pub struct ST7735<SPI, DC, RST>
-where
-    SPI: spi::Write<u8>,
-    DC: OutputPin,
-    RST: OutputPin,
+pub struct ST7735
 {
     /// SPI
-    spi: SPI,
+    spi: Spi,
 
     /// Data/command pin.
-    dc: DC,
+    dc: OutputPin,
 
     /// Reset pin.
-    rst: RST,
+    rst: OutputPin,
 
     /// Whether the display is RGB (true) or BGR (false)
     rgb: bool,
@@ -48,17 +40,13 @@ pub enum Orientation {
     LandscapeSwapped = 0xA0,
 }
 
-impl<SPI, DC, RST> ST7735<SPI, DC, RST>
-where
-    SPI: spi::Write<u8>,
-    DC: OutputPin,
-    RST: OutputPin,
+impl ST7735
 {
     /// Creates a new driver instance that uses hardware SPI.
     pub fn new(
-        spi: SPI,
-        dc: DC,
-        rst: RST,
+        spi: Spi,
+        dc: OutputPin,
+        rst: OutputPin,
         rgb: bool,
         inverted: bool,
         width: u32,
@@ -81,10 +69,10 @@ where
 
     /// Runs commands to initialize the display.
     pub fn init<DELAY>(&mut self, delay: &mut DELAY) -> Result<(), ()>
-    where
-        DELAY: DelayMs<u8>,
+        where
+            DELAY: DelayMs<u8>,
     {
-        self.hard_reset(delay)?;
+        self.hard_reset(delay);
         self.write_command(Instruction::SWRESET, &[])?;
         delay.delay_ms(200);
         self.write_command(Instruction::SLPOUT, &[])?;
@@ -115,47 +103,47 @@ where
         Ok(())
     }
 
-    pub fn hard_reset<DELAY>(&mut self, delay: &mut DELAY) -> Result<(), ()>
-    where
-        DELAY: DelayMs<u8>,
+    pub fn hard_reset<DELAY>(&mut self, delay: &mut DELAY)
+        where
+            DELAY: DelayMs<u8>,
     {
-        self.rst.set_high().map_err(|_| ())?;
+        self.rst.set_high();
         delay.delay_ms(10);
-        self.rst.set_low().map_err(|_| ())?;
+        self.rst.set_low();
         delay.delay_ms(10);
-        self.rst.set_high().map_err(|_| ())
+        self.rst.set_high()
     }
 
     fn write_command(&mut self, command: Instruction, params: &[u8]) -> Result<(), ()> {
-        self.dc.set_low().map_err(|_| ())?;
+        self.dc.set_low();
         self.spi.write(&[command as u8]).map_err(|_| ())?;
         if !params.is_empty() {
-            self.start_data()?;
+            self.start_data();
             self.write_data(params)?;
         }
         Ok(())
     }
 
-    fn start_data(&mut self) -> Result<(), ()> {
-        self.dc.set_high().map_err(|_| ())
+    fn start_data(&mut self) {
+        self.dc.set_high()
     }
 
-    fn write_data(&mut self, data: &[u8]) -> Result<(), ()> {
+    fn write_data(&mut self, data: &[u8]) -> Result<usize, ()> {
         self.spi.write(data).map_err(|_| ())
     }
 
     /// Writes a data word to the display.
-    fn write_word(&mut self, value: u16) -> Result<(), ()> {
+    fn write_word(&mut self, value: u16) -> Result<usize, ()> {
         self.write_data(&value.to_be_bytes())
     }
 
-    fn write_words_buffered(&mut self, words: impl IntoIterator<Item = u16>) -> Result<(), ()> {
+    fn write_words_buffered(&mut self, words: impl IntoIterator<Item = u16>) -> Result<usize, ()> {
         let mut buffer = [0; 32];
         let mut index = 0;
         for word in words {
             let as_bytes = word.to_be_bytes();
-            buffer[index] = as_bytes[0];
-            buffer[index + 1] = as_bytes[1];
+            buffer[index.clone()] = as_bytes[0].clone();
+            buffer[index.clone() + 1] = as_bytes[1].clone();
             index += 2;
             if index >= buffer.len() {
                 self.write_data(&buffer)?;
@@ -181,29 +169,29 @@ where
     }
 
     /// Sets the address window for the display.
-    pub fn set_address_window(&mut self, sx: u16, sy: u16, ex: u16, ey: u16) -> Result<(), ()> {
+    pub fn set_address_window(&mut self, sx: u16, sy: u16, ex: u16, ey: u16) -> Result<usize, ()> {
         self.write_command(Instruction::CASET, &[])?;
-        self.start_data()?;
-        self.write_word(sx + self.dx)?;
-        self.write_word(ex + self.dx)?;
+        self.start_data();
+        self.write_word(sx + self.dx.clone())?;
+        self.write_word(ex + self.dx.clone())?;
         self.write_command(Instruction::RASET, &[])?;
-        self.start_data()?;
-        self.write_word(sy + self.dy)?;
-        self.write_word(ey + self.dy)
+        self.start_data();
+        self.write_word(sy + self.dy.clone())?;
+        self.write_word(ey + self.dy.clone())
     }
 
     /// Sets a pixel color at the given coords.
-    pub fn set_pixel(&mut self, x: u16, y: u16, color: u16) -> Result<(), ()> {
+    pub fn set_pixel(&mut self, x: u16, y: u16, color: u16) -> Result<usize, ()> {
         self.set_address_window(x, y, x, y)?;
         self.write_command(Instruction::RAMWR, &[])?;
-        self.start_data()?;
+        self.start_data();
         self.write_word(color)
     }
 
     /// Writes pixel colors sequentially into the current drawing window
     pub fn write_pixels<P: IntoIterator<Item = u16>>(&mut self, colors: P) -> Result<(), ()> {
         self.write_command(Instruction::RAMWR, &[])?;
-        self.start_data()?;
+        self.start_data();
         for color in colors {
             self.write_word(color)?;
         }
@@ -212,9 +200,9 @@ where
     pub fn write_pixels_buffered<P: IntoIterator<Item = u16>>(
         &mut self,
         colors: P,
-    ) -> Result<(), ()> {
+    ) -> Result<usize, ()> {
         self.write_command(Instruction::RAMWR, &[])?;
-        self.start_data()?;
+        self.start_data();
         self.write_words_buffered(colors)
     }
 
@@ -238,7 +226,7 @@ where
         ex: u16,
         ey: u16,
         colors: P,
-    ) -> Result<(), ()> {
+    ) -> Result<usize, ()> {
         self.set_address_window(sx, sy, ex, ey)?;
         self.write_pixels_buffered(colors)
     }
@@ -251,32 +239,28 @@ use self::embedded_graphics::{
     draw_target::DrawTarget,
     pixelcolor::{
         raw::{RawData, RawU16},
-        Rgb565,
+        Bgr565,
     },
     prelude::*,
     primitives::Rectangle,
 };
 
 #[cfg(feature = "graphics")]
-impl<SPI, DC, RST> DrawTarget for ST7735<SPI, DC, RST>
-where
-    SPI: spi::Write<u8>,
-    DC: OutputPin,
-    RST: OutputPin,
+impl DrawTarget for ST7735
 {
+    type Color = Bgr565;
     type Error = ();
-    type Color = Rgb565;
 
     fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
+        where
+            I: IntoIterator<Item = Pixel<Self::Color>>,
     {
         for Pixel(coord, color) in pixels.into_iter() {
             // Only draw pixels that would be on screen
             if coord.x >= 0
                 && coord.y >= 0
-                && coord.x < self.width as i32
-                && coord.y < self.height as i32
+                && coord.x < self.width.clone() as i32
+                && coord.y < self.height.clone() as i32
             {
                 self.set_pixel(
                     coord.x as u16,
@@ -290,8 +274,8 @@ where
     }
 
     fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Self::Color>,
+        where
+            I: IntoIterator<Item = Self::Color>,
     {
         // Clamp area to drawable part of the display target
         let drawable_area = area.intersection(&Rectangle::new(Point::zero(), self.size()));
@@ -300,8 +284,8 @@ where
             self.set_pixels_buffered(
                 drawable_area.top_left.x as u16,
                 drawable_area.top_left.y as u16,
-                (drawable_area.top_left.x + (drawable_area.size.width - 1) as i32) as u16,
-                (drawable_area.top_left.y + (drawable_area.size.height - 1) as i32) as u16,
+                (drawable_area.top_left.x.clone() + (drawable_area.size.width - 1) as i32) as u16,
+                (drawable_area.top_left.y.clone() + (drawable_area.size.height - 1) as i32) as u16,
                 area.points()
                     .zip(colors)
                     .filter(|(pos, _color)| drawable_area.contains(*pos))
@@ -316,22 +300,19 @@ where
         self.set_pixels_buffered(
             0,
             0,
-            self.width as u16 - 1,
-            self.height as u16 - 1,
+            self.width.clone() as u16 - 1,
+            self.height.clone() as u16 - 1,
             core::iter::repeat(RawU16::from(color).into_inner())
-                .take((self.width * self.height) as usize),
-        )
+                .take((self.width.clone() * self.height.clone()) as usize),
+        )?;
+        Ok(())
     }
 }
 
 #[cfg(feature = "graphics")]
-impl<SPI, DC, RST> OriginDimensions for ST7735<SPI, DC, RST>
-where
-    SPI: spi::Write<u8>,
-    DC: OutputPin,
-    RST: OutputPin,
+impl OriginDimensions for ST7735
 {
     fn size(&self) -> Size {
-        Size::new(self.width, self.height)
+        Size::new(self.width.clone(), self.height.clone())
     }
 }
